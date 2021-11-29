@@ -61,7 +61,7 @@ func path(filePath string, operation string) bool {
 }
 
 func connectForever(address string, ch chan<- string) {
-	for ; ; {
+	for {
 		_, err := net.Dial("tcp", address)
 		if err == nil {
 			ch <- "success"
@@ -260,7 +260,6 @@ func listenersFromAdvertisedListeners(listeners string) string {
 	return re.ReplaceAllString(listeners, "://0.0.0.0:")
 }
 
-
 func loadConfigSpec(path string) ConfigSpec {
 	jsonFile, err := os.Open(path)
 	if err != nil {
@@ -284,8 +283,9 @@ func loadConfigSpec(path string) ConfigSpec {
 TOOD: add remark about how flags work in golang
 */
 func checkHttp(host string, port string, timeout time.Duration, path string, useHttps bool, ignoreCert bool, username string, password string, pred func(string) bool) bool {
+	address := host + ":" + port
 	if !waitForServer(host+":"+port, timeout) {
-		fmt.Printf("Could not reach address")
+		fmt.Fprintf(os.Stderr, "Could not reach address %s in %s", address, timeout.String())
 		return false
 	}
 	tlsConf := &tls.Config{
@@ -311,17 +311,17 @@ func checkHttp(host string, port string, timeout time.Duration, path string, use
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Printf("Error performing request to %s", url)
+		fmt.Fprintf(os.Stderr, "Error performing request to %s", url)
 		return false
 	}
 	if resp.StatusCode/100 != 2 {
-		fmt.Printf("Failed to perform, %d", resp.StatusCode)
+		fmt.Fprintf(os.Stderr, "Failed to perform, %d", resp.StatusCode)
 		return false
 	}
 	if pred != nil {
 		bodyText, err := io.ReadAll(resp.Body)
 		if err != nil {
-			fmt.Println("Error reading response")
+			fmt.Fprintln(os.Stderr, "Error reading response")
 			return false
 		}
 		return pred(string(bodyText))
@@ -338,8 +338,8 @@ func performHttpCheck(path string, pred func(string) bool) bool {
 
 	httpReadyCmd.Parse(os.Args[2:])
 	if httpReadyCmd.NArg() != 3 {
-		fmt.Print("Missing positional argument")
-		fmt.Println(httpReadyCmd.Args())
+		fmt.Fprint(os.Stderr, "Missing positional argument: ")
+		fmt.Fprintln(os.Stderr, httpReadyCmd.Args())
 		return false
 	} else {
 		return checkHttp(httpReadyCmd.Arg(0), httpReadyCmd.Arg(1), parseSecondsDuration(httpReadyCmd.Arg(2)), path, *httpReadySecure, *httpReadyIngnoreCert, *httpReadyUserName, *httpReadyPassword,
@@ -348,18 +348,15 @@ func performHttpCheck(path string, pred func(string) bool) bool {
 }
 
 func invokeJavaCommand(className string, jvmOpts string, args []string) bool {
-	classPath := os.Getenv("CUB_CLASSPATH")
-	if classPath == "" {
-		//TODO: change to system-path
-		classPath = "/Users/cschubert/git/christophschubert/confluent-docker-utils-go/deps.jar"
-	}
+	//TODO: change to system-path
+	classPath := getEnvOrDefault("CUB_CLASSPATH", "/Users/cschubert/git/christophschubert/confluent-docker-utils-go/deps.jar")
+
 	opts := []string{}
 	if jvmOpts != "" {
 		opts = append(opts, jvmOpts)
 	}
 	opts = append(opts, "-cp", classPath, className)
 	cmd := exec.Command("java", append(opts[:], args...)...)
-	fmt.Println(cmd.Args)
 
 	if err := cmd.Run(); err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
@@ -412,7 +409,7 @@ func ensureTopic(configFile string, topicConfigFile string, timeout string, crea
 }
 
 func waitForPathForever(pathToWaitFor string, ch chan<- string) {
-	for ; ; {
+	for {
 		if path(pathToWaitFor, "existence") {
 			ch <- "success"
 		}
@@ -436,8 +433,19 @@ func waitForPath(path string, timeoutSeconds string) bool {
 	}
 }
 
+func checkAndPrintUsage(numArguments int, message string) {
+	if len(os.Args) != numArguments {
+		fmt.Fprintf(os.Stderr, "Usage '%s %s %s", os.Args[0], os.Args[1], message)
+		os.Exit(1)
+	}
+}
+
 func main() {
 	success := false
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage '%s <subcommand> ...'", os.Args[0])
+		os.Exit(1)
+	}
 	switch os.Args[1] {
 	//commands from the 'dub' tool
 	case "template":
@@ -445,10 +453,7 @@ func main() {
 		os.Exit(2)
 	case "render-template":
 		// render a template (used for log4j properties)
-		if len(os.Args) != 3 {
-			fmt.Fprintln(os.Stderr, "Usage 'ub render-template <path-to-template>")
-			os.Exit(1)
-		}
+		checkAndPrintUsage(3, "<path-to-template>")
 		templateFile, err := os.Open(os.Args[2])
 		if err != nil {
 			panic(err) // TODO: write to stderr instead of break
@@ -458,27 +463,21 @@ func main() {
 			panic(err)
 		}
 		funcs := template.FuncMap{
-			"formatHeritage": formatHeritage,
-			"getEnv": getEnvOrDefault,
-			"split": strings.Split,
+			"formatHeritage":     formatHeritage,
+			"getEnv":             getEnvOrDefault,
+			"split":              strings.Split,
 			"splitToMapDefaults": splitToMapDefaults,
 		}
 		t := template.Must(template.New("tmpl").Funcs(funcs).Parse(string(bytes)))
 		renderTemplate(os.Stdout, *t)
 		success = true
 	case "render-properties":
-		if len(os.Args) != 3 {
-			fmt.Fprintln(os.Stderr, "Usage 'ub render-properties <path-to-config-spec>")
-			os.Exit(1)
-		}
+		checkAndPrintUsage(3, "<path-to-config-spec>")
 		configSpec := loadConfigSpec(os.Args[2])
 		renderConfig(os.Stdout, configSpec)
 		success = true
 	case "render-properties-prefix":
-		if len(os.Args) != 3 {
-			fmt.Fprintln(os.Stderr, "Usage 'ub render-properties-prefix <env-var-prefix>")
-			os.Exit(1)
-		}
+		checkAndPrintUsage(3, "<env-var-prefix>")
 		renderConfigViaPrefix(os.Stdout, os.Args[2])
 		success = true
 	case "ensure":
@@ -502,8 +501,7 @@ func main() {
 		ensureTopicCreate := ensureTopicCmd.Bool("create_if_not_exists", false, "Create topics if they do not yet exist.")
 		ensureTopicCmd.Parse(os.Args[2:])
 		if ensureTopicCmd.NArg() != 3 {
-			fmt.Print("Missing positional argument")
-			fmt.Println(ensureTopicCmd.Args())
+			fmt.Fprintln(os.Stderr, "Missing positional argument", ensureTopicCmd.Args())
 		} else {
 			success = ensureTopic(ensureTopicCmd.Arg(0), ensureTopicCmd.Arg(1), ensureTopicCmd.Arg(2), *ensureTopicCreate)
 		}
@@ -517,26 +515,23 @@ func main() {
 		kafkaReadySecurity := kafkaReadyCmd.String("s", "", "Security protocol")
 
 		kafkaReadyCmd.Parse(os.Args[2:])
-
 		if kafkaReadyCmd.NArg() != 2 {
-			fmt.Print("Missing positional argument")
-			fmt.Println(kafkaReadyCmd.Args())
+			fmt.Fprintln(os.Stderr, "Missing positional argument", kafkaReadyCmd.Args())
 		} else {
 			success = checkKafkaReady(kafkaReadyCmd.Arg(0), kafkaReadyCmd.Arg(1), *kafkaReadyBootstrap, *kafkaReadyZooKeeper, *kafkaReadyConfig, *kafkaReadySecurity)
 		}
 	case "zk-ready":
-		if len(os.Args) != 4 {
-			fmt.Println("Usage .....") //TODO
-		} else {
-			jvmOpts := ""
-			isZooKeeperSaslEnabled := getEnvOrDefault("ZOOKEEPER_SASL_ENABLED", "")
-			if strings.ToUpper(isZooKeeperSaslEnabled) != "FALSE" {
-				jvmOpts = os.Getenv("KAFKA_OPTS")
-			}
-			args := [...]string{os.Args[2], os.Args[3] + "000"}
+		checkAndPrintUsage(4, "<zookeeper-connect> <timeout-in-seconds>")
 
-			success = invokeJavaCommand("io.confluent.admin.utils.cli.ZookeeperReadyCommand", jvmOpts, args[:])
+		jvmOpts := ""
+		isZooKeeperSaslEnabled := getEnvOrDefault("ZOOKEEPER_SASL_ENABLED", "")
+		if strings.ToUpper(isZooKeeperSaslEnabled) != "FALSE" {
+			jvmOpts = os.Getenv("KAFKA_OPTS")
 		}
+		args := [...]string{os.Args[2], os.Args[3] + "000"}
+
+		success = invokeJavaCommand("io.confluent.admin.utils.cli.ZookeeperReadyCommand", jvmOpts, args[:])
+
 	case "sr-ready":
 		success = performHttpCheck("config", func(s string) bool { return strings.Contains(s, "compatibilityLevel") })
 	case "kr-ready":
@@ -548,7 +543,7 @@ func main() {
 	case "control-center-ready":
 		success = performHttpCheck("", func(s string) bool { return strings.Contains(s, "Control Center") })
 	default:
-		fmt.Println("Unknown subcommand " + os.Args[1])
+		fmt.Fprintln(os.Stderr, "Unknown subcommand "+os.Args[1])
 	}
 
 	if !success {
